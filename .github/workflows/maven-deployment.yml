@@ -1,0 +1,118 @@
+name: Reusable Maven Deployment Workflow
+
+on:
+  workflow_call:
+    inputs:
+      repo_name:
+        description: 'Repository name'
+        required: true
+        type: string
+      node_version:
+        description: 'Node version for the build process'
+        default: '16'
+        required: false
+        type: string
+      java_version:
+        description: 'Java version for the build process'
+        default: '11'
+        required: false
+        type: string
+      java_distribution:
+        description: 'Java distributio to use'
+        default: 'corretto'
+        required: false
+        type: string
+      environment:
+        description: 'Logical environment. E.g.: prod, staging, training, qa, develop, etc. It can also be demo, poc, test and so on.'
+        required: true
+        type: string
+      mvn_command:
+        description: 'Maven command to run'
+        required: false
+        default: 'mvn install'
+        type: string
+      deploy:
+        description: 'Deploy command to run'
+        required: false
+        default: 'npm run deploy'
+        type: string
+      aws_region:
+        description: 'AWS region'
+        default: us-east-1
+        required: false
+        type: string
+      pipeline_environment: 
+        description: 'Pipeline environment. E.g.: prod, staging, training, QA, develop'
+        required: true
+        type: string
+      working_directory:
+        description: Working directory where the Node app is located
+        default: .
+        required: false
+        type: string
+        
+    secrets:
+      APPLICATION_ACCESS_TOKEN:
+        description: 'GitHub Access Token'
+        required: true
+      AWS_ROLE_NAME:
+        description: 'AWS role that the pipeline will assume'
+        required: true
+      AWS_ACCOUNT_ID:
+        description: 'AWS Account ID to be deployed'
+        required: true
+
+permissions:
+  id-token: write
+  contents: read 
+
+jobs:
+  maven_deploy:
+    environment: ${{ inputs.pipeline_environment }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+    name: Maven Deployment
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: false
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1-node16
+        with:
+          role-to-assume: "${{ format('arn:aws:iam::{0}:role/{1}', secrets.AWS_ACCOUNT_ID, secrets.AWS_ROLE_NAME )}}"
+          aws-region: ${{ inputs.aws_region }}
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ inputs.node_version }}
+          check-latest: true
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ inputs.java_version }}
+          distribution: ${{ inputs.java_distribution }}
+      - uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: rewriting git config urls
+        run: |
+          git config --global --add url."https://${{ secrets.APPLICATION_ACCESS_TOKEN }}@github.com/".insteadOf ssh://git@github.com/
+          git config --global -l
+          git config --global --add url."https://${{ secrets.APPLICATION_ACCESS_TOKEN }}@github.com/".insteadOf git://
+          git config --global -l
+      - name: Installing node dependencies
+        run: |
+          git config --global -l
+          npm ci -d
+      - name: Build java
+        run: ${{ inputs.mvn_command }}
+      - name: Deploy
+        run: ${{ inputs.deploy }}
